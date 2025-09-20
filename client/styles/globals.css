@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    padding: 0;
+    margin: 0;
+  }
+
+  html,
+  body {
+    max-width: 100vw;
+    overflow-x: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  }
+
+  body {
+    background: #111827;
+    color: #ffffff;
+  }
+}
+
+@layer components {
+  .casino-card {
+    @apply bg-gray-800 border border-gray-700 rounded-xl shadow-2xl;
+  }
+  
+  .casino-button {
+    @apply px-6 py-3 rounded-lg font-bold transition-all duration-200 transform hover:scale-105;
+  }
+  
+  .casino-button-primary {
+    @apply casino-button bg-blue-600 text-white hover:bg-blue-700;
+  }
+  
+  .casino-button-success {
+    @apply casino-button bg-green-600 text-white hover:bg-green-700;
+  }
+  
+  .casino-button-danger {
+    @apply casino-button bg-red-600 text-white hover:bg-red-700;
+  }
+}
