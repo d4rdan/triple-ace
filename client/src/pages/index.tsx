@@ -1,4 +1,4 @@
-// /client/src/pages/index.tsx - Fixed for hydration
+// /client/src/pages/index.tsx - Fixed dynamic imports
 import React, { useState, useEffect } from 'react';
 import { PlatformProvider, usePlatform } from '../components/platform/PlatformProvider';
 import Head from 'next/head';
@@ -15,7 +15,8 @@ const GameLobby = dynamic(() => import('../components/platform/GameLobby').then(
   </div>
 });
 
-const RouletteGame = dynamic(() => import('../components/roulette/RouletteGame').then(mod => ({ default: mod.RouletteGame })), {
+// ✅ Fixed: RouletteGame uses default export, no destructuring needed
+const RouletteGame = dynamic(() => import('../components/roulette/RouletteGame'), {
   ssr: false,
   loading: () => <div className="min-h-screen bg-gradient-to-br from-green-900 via-green-800 to-green-900 flex items-center justify-center text-white">
     <div className="text-center">
@@ -74,7 +75,6 @@ export default function Home() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" href="/favicon.ico" />
       </Head>
-      
       <PlatformProvider>
         <div className="min-h-screen">
           <AppContent />
