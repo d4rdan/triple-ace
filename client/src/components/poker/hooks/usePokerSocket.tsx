@@ -1,4 +1,4 @@
-// /client/src/components/poker/hooks/usePokerSocket.tsx - Fixed data conversion
+// /client/src/components/poker/hooks/usePokerSocket.tsx - Fixed syntax error
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Client, Room } from 'colyseus.js';
 import { PokerGameState, PokerPlayer } from '../context/PokerGameContext';
@@ -134,14 +134,16 @@ export const usePokerSocket = (callbacks: PokerSocketCallbacks) => {
       roomRef.current = null;
     });
 
-    // Listen for state changes on specific properties
-    room.state.players?.onAdd = (player: any, key: string) => {
-      console.log('[PokerSocket] Player added:', key, player);
-    };
+    // Listen for state changes on specific properties - Fixed syntax
+    if (room.state.players) {
+      room.state.players.onAdd = (player: any, key: string) => {
+        console.log('[PokerSocket] Player added:', key, player);
+      };
 
-    room.state.players?.onRemove = (player: any, key: string) => {
-      console.log('[PokerSocket] Player removed:', key, player);
-    };
+      room.state.players.onRemove = (player: any, key: string) => {
+        console.log('[PokerSocket] Player removed:', key, player);
+      };
+    }
 
   }, [callbacks]);
 
