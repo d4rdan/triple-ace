@@ -1,119 +1,54 @@
-// /server/src/index.ts - Fixed Colyseus method signatures
-import { Server, Room, Client } from 'colyseus';
-import { Schema, type } from '@colyseus/schema';
+// server/src/index.ts - Simplified version
+
+import { Server } from 'colyseus';
 import { createServer } from 'http';
 import express from 'express';
 import cors from 'cors';
+import { PokerRoom } from './rooms/PokerRoom';
 
-// Simple state for testing
-class TestState extends Schema {
-  @type('string') message = 'Poker Server Ready!';
-  @type('number') playerCount = 0;
-}
-
-// Simple room for testing
-class TestRoom extends Room<TestState> {
-  maxClients = 4;
-
-  onCreate(options: any) {
-    this.setState(new TestState());
-    console.log('[TestRoom] Room created');
-
-    // Register message handlers
-    this.onMessage('test', (client, message) => {
-      console.log(`[TestRoom] Test message from ${client.sessionId}:`, message);
-      this.broadcast('testResponse', { from: client.sessionId, data: message });
-    });
-
-    this.onMessage('action', (client, message) => {
-      console.log(`[TestRoom] Action from ${client.sessionId}:`, message);
-      this.broadcast('actionResponse', {
-        playerId: client.sessionId,
-        action: message.type,
-        data: message.data
-      });
-    });
-
-    // Catch-all message handler
-    this.onMessage('*', (client, type, message) => {
-      console.log(`[TestRoom] Unknown message from ${client.sessionId}: ${type}`, message);
-      this.send(client, 'error', { message: `Unknown message type: ${type}` });
-    });
-  }
-
-  onJoin(client: Client, options: any) {
-    this.state.playerCount++;
-    console.log(`[TestRoom] Player joined: ${client.sessionId}`);
-    this.broadcast('playerJoined', {
-      playerId: client.sessionId,
-      playerName: options.playerName || 'Anonymous'
-    });
-  }
-
-  onLeave(client: Client, consented: boolean) {
-    this.state.playerCount--;
-    console.log(`[TestRoom] Player left: ${client.sessionId}`);
-  }
-}
-
-// Create Express app
 const app = express();
-app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:5173'],
-  credentials: true
-}));
+const PORT = process.env.PORT || 3001;
+
+// Middleware
+app.use(cors());
 app.use(express.json());
 
 // Create HTTP server
-const httpServer = createServer(app);
+const server = createServer(app);
 
 // Create Colyseus server
 const gameServer = new Server({
-  server: httpServer
+  server: server,
 });
 
-// Register the room
-gameServer.define('poker_room', TestRoom);
+// Register rooms
+gameServer.define('poker', PokerRoom);
 
-// Add routes to Express app
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    rooms: 'poker_room available',
-    version: '1.0.0'
-  });
-});
-
+// Basic routes
 app.get('/', (req, res) => {
-  res.json({
+  res.json({ 
     message: 'Poker Server Running',
-    websocket: `ws://localhost:${PORT}`,
-    room: 'poker_room',
-    health: `http://localhost:${PORT}/health`
+    rooms: ['poker'],
+    port: PORT
   });
 });
 
-// Start the server
-const PORT = 2567;
-gameServer.listen(PORT);
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString()
+  });
+});
 
-console.log('🎮 Poker Server Started!');
-console.log(`🔗 WebSocket: ws://localhost:${PORT}`);
-console.log(`🩺 Health: http://localhost:${PORT}/health`);
-console.log(`📋 Test: Open http://localhost:${PORT} in browser`);
-
-// Shutdown handler
-process.on('SIGINT', () => {
-  console.log('\n🛑 Shutting down...');
-  process.exit(0);
+// Start server
+server.listen(PORT, () => {
+  console.log(`🎮 Poker Server running on port ${PORT}`);
+  console.log(`🌐 HTTP: http://localhost:${PORT}`);
+  console.log(`🔗 WebSocket: ws://localhost:${PORT}`);
 });
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('\n🛑 SIGTERM received, shutting down...');
-  httpServer.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
-  });
+process.on('SIGINT', () => {
+  console.log('\n🛑 Shutting down server...');
+  process.exit(0);
 });

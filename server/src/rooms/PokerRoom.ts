@@ -1,675 +1,403 @@
-// /server/src/rooms/PokerRoom.ts - Fixed property visibility
+// server/src/rooms/PokerRoom.ts
+
 import { Room, Client } from 'colyseus';
 import { Schema, type, MapSchema, ArraySchema } from '@colyseus/schema';
 
-// Define the state classes
-class Card extends Schema {
-  @type('string') id: string = '';
-  @type('string') suit: '♠' | '♥' | '♦' | '♣' = '♠';
-  @type('string') rank: '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K' | 'A' = '2';
-  @type('number') value: number = 2;
+// Card schema
+export class Card extends Schema {
+  @type('string') suit: string;
+  @type('string') rank: string;
+  @type('number') value: number;
+
+  constructor(suit: string, rank: string, value: number) {
+    super();
+    this.suit = suit;
+    this.rank = rank;
+    this.value = value;
+  }
 }
 
-class PokerPlayer extends Schema {
-  @type('string') id: string = '';
-  @type('string') name: string = '';
-  @type('number') chips: number = 1000;
-  @type([Card]) cards = new ArraySchema<Card>();
-  @type('number') currentBet: number = 0;
-  @type('boolean') folded: boolean = false;
-  @type('boolean') allIn: boolean = false;
-  @type('boolean') connected: boolean = true;
-  @type('number') position: number = 0;
-  @type('boolean') isDealer: boolean = false;
-  @type('boolean') hasActed: boolean = false;
-  @type('boolean') showCards: boolean = false;
+// Player schema
+export class Player extends Schema {
+  @type('string') id: string;
+  @type('string') name: string;
+  @type('number') chips: number;
+  @type('number') currentBet: number;
+  @type('boolean') isActive: boolean;
+  @type('boolean') isFolded: boolean;
+  @type('boolean') isAllIn: boolean;
+  @type('number') position: number;
+  @type([Card]) hand = new ArraySchema<Card>();
+  @type('string') lastAction: string;
+
+  constructor(id: string, name: string, position: number) {
+    super();
+    this.id = id;
+    this.name = name;
+    this.chips = 1000; // Starting chips
+    this.currentBet = 0;
+    this.isActive = true;
+    this.isFolded = false;
+    this.isAllIn = false;
+    this.position = position;
+    this.lastAction = '';
+  }
 }
 
-class Winner extends Schema {
-  @type('string') playerId: string = '';
-  @type('string') playerName: string = '';
-  @type('string') hand: string = '';
-  @type('number') winAmount: number = 0;
-}
-
-class PokerState extends Schema {
-  @type('string') gamePhase: 'waiting' | 'pre-flop' | 'flop' | 'turn' | 'river' | 'showdown' | 'finished' = 'waiting';
-  @type({ map: PokerPlayer }) players = new MapSchema<PokerPlayer>();
+// Game state schema
+export class PokerState extends Schema {
+  @type({ map: Player }) players = new MapSchema<Player>();
   @type([Card]) communityCards = new ArraySchema<Card>();
   @type('number') pot: number = 0;
   @type('number') currentBet: number = 0;
-  @type('string') currentTurn: string = '';
+  @type('string') currentPlayer: string = '';
+  @type('string') phase: string = 'waiting'; // waiting, pre-flop, flop, turn, river, showdown
   @type('number') dealerPosition: number = 0;
   @type('number') smallBlind: number = 10;
   @type('number') bigBlind: number = 20;
-  @type('number') round: number = 1;
-  @type(Winner) winner?: Winner;
+  @type('string') message: string = '';
+  @type('boolean') gameStarted: boolean = false;
+  @type('number') roundNumber: number = 0;
 }
 
 export class PokerRoom extends Room<PokerState> {
-  // Make maxClients public to fix TypeScript error
-  public maxClients = 8;
-  
-  private smallBlind = 10;
-  private bigBlind = 20;
-  private turnTimeLimit = 30000;
-  private gameTimer?: NodeJS.Timeout;
-  private turnTimer?: NodeJS.Timeout;
+  private deck: Card[] = [];
+  private playerOrder: string[] = [];
+  private currentPlayerIndex: number = 0;
+  private actionCount: number = 0;
 
   onCreate(options: any) {
-    console.log('[PokerRoom] Creating room');
-    
     this.setState(new PokerState());
-    this.autoDispose = true;
+    this.maxClients = 4;
     
-    // Initialize game state
-    this.state.gamePhase = 'waiting';
-    this.state.smallBlind = this.smallBlind;
-    this.state.bigBlind = this.bigBlind;
-    this.state.round = 1;
-    this.state.pot = 0;
-    this.state.currentBet = 0;
-    this.state.dealerPosition = 0;
+    console.log('Poker room created with options:', options);
+    this.state.message = 'Waiting for players...';
 
-    console.log('[PokerRoom] Room created successfully');
+    // Handle player actions
+    this.onMessage('player-action', (client, message) => {
+      this.handlePlayerAction(client, message);
+    });
+
+    this.onMessage('start-game', (client) => {
+      this.startGame();
+    });
   }
 
   onJoin(client: Client, options: any) {
-    console.log(`[PokerRoom] Player joining: ${options.playerName || 'Unknown'}`);
-
-    if (this.state.players.size >= this.maxClients) {
-      throw new Error('Room is full');
-    }
-
-    if (this.state.gamePhase !== 'waiting') {
-      throw new Error('Game already in progress');
-    }
-
-    // Create new player
-    const player = new PokerPlayer();
-    player.id = client.sessionId;
-    player.name = options.playerName || `Player ${this.state.players.size + 1}`;
-    player.chips = 1000;
-    player.position = this.state.players.size;
-    player.connected = true;
-
-    // Set dealer for first player
-    if (this.state.players.size === 0) {
-      player.isDealer = true;
-      this.state.dealerPosition = 0;
-    }
-
+    console.log(`Player ${client.sessionId} joined poker room`);
+    
+    const playerName = options.name || `Player ${this.clients.length}`;
+    const position = this.clients.length - 1;
+    
+    const player = new Player(client.sessionId, playerName, position);
     this.state.players.set(client.sessionId, player);
-
-    // Notify other players
-    this.broadcast('playerJoined', {
-      player: {
-        id: player.id,
-        name: player.name,
-        chips: player.chips,
-        position: player.position
-      }
-    }, { except: client });
-
-    console.log(`[PokerRoom] Player ${player.name} joined. Total: ${this.state.players.size}`);
-
-    // Start game if we have enough players
-    if (this.state.players.size >= 2 && this.state.gamePhase === 'waiting') {
-      this.scheduleGameStart();
+    
+    this.state.message = `${playerName} joined the game (${this.clients.length}/4 players)`;
+    
+    // Auto-start game when we have at least 2 players
+    if (this.clients.length >= 2 && !this.state.gameStarted) {
+      setTimeout(() => {
+        this.startGame();
+      }, 2000);
     }
   }
 
   onLeave(client: Client, consented: boolean) {
-    console.log(`[PokerRoom] Player ${client.sessionId} leaving`);
-
+    console.log(`Player ${client.sessionId} left poker room`);
+    
     const player = this.state.players.get(client.sessionId);
     if (player) {
-      player.connected = false;
+      this.state.message = `${player.name} left the game`;
+      this.state.players.delete(client.sessionId);
       
-      // If game is in progress, mark as folded
-      if (this.state.gamePhase !== 'waiting' && this.state.gamePhase !== 'finished') {
-        player.folded = true;
-        
-        // If it was their turn, move to next player
-        if (this.state.currentTurn === client.sessionId) {
-          this.nextTurn();
-        }
+      // Remove from player order
+      this.playerOrder = this.playerOrder.filter(id => id !== client.sessionId);
+      
+      // If game is in progress and player was current player, advance turn
+      if (this.state.gameStarted && this.state.currentPlayer === client.sessionId) {
+        this.nextPlayer();
       }
-
-      // Notify other players
-      this.broadcast('playerLeft', {
-        player: { id: player.id, name: player.name }
-      });
-
-      // Remove player if game hasn't started
-      if (this.state.gamePhase === 'waiting') {
-        this.state.players.delete(client.sessionId);
+      
+      // End game if not enough players
+      if (this.clients.length < 2 && this.state.gameStarted) {
+        this.endGame();
       }
-    }
-
-    // End game if not enough players
-    if (this.getActivePlayers().length < 2 && this.state.gamePhase !== 'waiting') {
-      this.endGame('Not enough players');
     }
   }
 
-  onMessage(client: Client, type: string, message: any) {
-    console.log(`[PokerRoom] Message: ${type}`, message);
-
-    const player = this.state.players.get(client.sessionId);
-    if (!player || !player.connected) {
-      return;
-    }
-
-    // Validate turn for game actions
-    const gameActions = ['fold', 'check', 'call', 'raise', 'allIn'];
-    if (gameActions.includes(type)) {
-      if (this.state.currentTurn !== client.sessionId) {
-        this.send(client, 'error', { message: 'Not your turn' });
-        return;
-      }
-
-      if (player.folded || player.allIn) {
-        this.send(client, 'error', { message: 'Cannot act - already folded or all-in' });
-        return;
-      }
-    }
-
-    switch (type) {
-      case 'fold':
-        this.handleFold(client.sessionId);
-        break;
-      case 'check':
-        this.handleCheck(client.sessionId);
-        break;
-      case 'call':
-        this.handleCall(client.sessionId);
-        break;
-      case 'raise':
-        this.handleRaise(client.sessionId, message?.amount || 0);
-        break;
-      case 'allIn':
-        this.handleAllIn(client.sessionId);
-        break;
-      default:
-        console.warn(`[PokerRoom] Unknown message: ${type}`);
-    }
-  }
-
-  private scheduleGameStart() {
-    if (this.gameTimer) {
-      clearTimeout(this.gameTimer);
-    }
-
-    console.log('[PokerRoom] Game starting in 3 seconds...');
-    this.gameTimer = setTimeout(() => {
-      this.startNewHand();
-    }, 3000);
-  }
-
-  private startNewHand() {
-    console.log('[PokerRoom] Starting new hand');
-
-    // Reset players
-    this.state.players.forEach(player => {
-      player.cards.clear();
-      player.currentBet = 0;
-      player.folded = false;
-      player.allIn = false;
-      player.hasActed = false;
-      player.showCards = false;
-    });
-
-    // Reset game state
-    this.state.communityCards.clear();
+  private startGame() {
+    if (this.clients.length < 2) return;
+    
+    this.state.gameStarted = true;
+    this.state.roundNumber++;
+    this.state.phase = 'pre-flop';
     this.state.pot = 0;
-    this.state.currentBet = 0;
-
-    // Deal cards
+    this.state.currentBet = this.state.bigBlind;
+    
+    // Reset all players
+    this.state.players.forEach(player => {
+      player.currentBet = 0;
+      player.isFolded = false;
+      player.isAllIn = false;
+      player.lastAction = '';
+      player.hand.clear();
+    });
+    
+    // Set up player order
+    this.playerOrder = Array.from(this.state.players.keys());
+    
+    // Create and shuffle deck
+    this.createDeck();
+    this.shuffleDeck();
+    
+    // Deal hole cards
     this.dealHoleCards();
-
+    
     // Post blinds
     this.postBlinds();
+    
+    // Set first player to act (after big blind)
+    this.currentPlayerIndex = (this.state.dealerPosition + 3) % this.playerOrder.length;
+    this.state.currentPlayer = this.playerOrder[this.currentPlayerIndex];
+    
+    this.state.message = 'Game started! Betting round begins.';
+    this.state.communityCards.clear();
+    this.actionCount = 0;
+  }
 
-    // Set game phase
-    this.state.gamePhase = 'pre-flop';
-    this.setFirstTurn();
-    this.startTurnTimer();
+  private createDeck() {
+    const suits = ['♠', '♥', '♦', '♣'];
+    const ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+    const values = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+    
+    this.deck = [];
+    for (let i = 0; i < suits.length; i++) {
+      for (let j = 0; j < ranks.length; j++) {
+        this.deck.push(new Card(suits[i], ranks[j], values[j]));
+      }
+    }
+  }
 
-    this.broadcast('gameStarted');
+  private shuffleDeck() {
+    for (let i = this.deck.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [this.deck[i], this.deck[j]] = [this.deck[j], this.deck[i]];
+    }
   }
 
   private dealHoleCards() {
-    const deck = this.createDeck();
-    let cardIndex = 0;
-
-    this.state.players.forEach(player => {
-      if (player.connected) {
-        // Deal 2 cards to each player
-        for (let i = 0; i < 2; i++) {
-          player.cards.push(deck[cardIndex++]);
+    // Deal 2 cards to each player
+    for (let i = 0; i < 2; i++) {
+      this.playerOrder.forEach(playerId => {
+        const player = this.state.players.get(playerId);
+        if (player && this.deck.length > 0) {
+          player.hand.push(this.deck.pop()!);
         }
-      }
-    });
-  }
-
-  private createDeck(): Card[] {
-    const suits: Array<'♠' | '♥' | '♦' | '♣'> = ['♠', '♥', '♦', '♣'];
-    const ranks: Array<'2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K' | 'A'> = 
-      ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
-    
-    const deck: Card[] = [];
-    
-    // Create all 52 cards
-    for (const suit of suits) {
-      for (const rank of ranks) {
-        const card = new Card();
-        card.id = `${suit}${rank}`;
-        card.suit = suit;
-        card.rank = rank;
-        card.value = this.getRankValue(rank);
-        deck.push(card);
-      }
-    }
-    
-    // Shuffle deck
-    for (let i = deck.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [deck[i], deck[j]] = [deck[j], deck[i]];
-    }
-    
-    return deck;
-  }
-
-  private getRankValue(rank: string): number {
-    switch (rank) {
-      case '2': return 2;
-      case '3': return 3;
-      case '4': return 4;
-      case '5': return 5;
-      case '6': return 6;
-      case '7': return 7;
-      case '8': return 8;
-      case '9': return 9;
-      case '10': return 10;
-      case 'J': return 11;
-      case 'Q': return 12;
-      case 'K': return 13;
-      case 'A': return 14;
-      default: return 2;
+      });
     }
   }
 
   private postBlinds() {
-    const players = this.getActivePlayers();
-    if (players.length < 2) return;
-
-    // Small blind
-    const smallBlindPlayer = players[(this.state.dealerPosition + 1) % players.length];
-    const smallBlindAmount = Math.min(this.smallBlind, smallBlindPlayer.chips);
-    smallBlindPlayer.chips -= smallBlindAmount;
-    smallBlindPlayer.currentBet = smallBlindAmount;
-    this.state.pot += smallBlindAmount;
-
-    // Big blind
-    const bigBlindPlayer = players[(this.state.dealerPosition + 2) % players.length];
-    const bigBlindAmount = Math.min(this.bigBlind, bigBlindPlayer.chips);
-    bigBlindPlayer.chips -= bigBlindAmount;
-    bigBlindPlayer.currentBet = bigBlindAmount;
-    this.state.pot += bigBlindAmount;
-    this.state.currentBet = bigBlindAmount;
-
-    console.log(`[PokerRoom] Blinds posted: ${smallBlindPlayer.name} (${smallBlindAmount}), ${bigBlindPlayer.name} (${bigBlindAmount})`);
+    const smallBlindPos = (this.state.dealerPosition + 1) % this.playerOrder.length;
+    const bigBlindPos = (this.state.dealerPosition + 2) % this.playerOrder.length;
+    
+    const smallBlindPlayer = this.state.players.get(this.playerOrder[smallBlindPos]);
+    const bigBlindPlayer = this.state.players.get(this.playerOrder[bigBlindPos]);
+    
+    if (smallBlindPlayer) {
+      smallBlindPlayer.currentBet = this.state.smallBlind;
+      smallBlindPlayer.chips -= this.state.smallBlind;
+      smallBlindPlayer.lastAction = `Small Blind (${this.state.smallBlind})`;
+      this.state.pot += this.state.smallBlind;
+    }
+    
+    if (bigBlindPlayer) {
+      bigBlindPlayer.currentBet = this.state.bigBlind;
+      bigBlindPlayer.chips -= this.state.bigBlind;
+      bigBlindPlayer.lastAction = `Big Blind (${this.state.bigBlind})`;
+      this.state.pot += this.state.bigBlind;
+    }
   }
 
-  private setFirstTurn() {
-    const players = this.getActivePlayers();
-    if (players.length < 2) return;
-
-    // First to act is after big blind
-    const firstPlayerIndex = (this.state.dealerPosition + 3) % players.length;
-    const firstPlayer = players[firstPlayerIndex];
-    this.state.currentTurn = firstPlayer.id;
-
-    console.log(`[PokerRoom] First turn: ${firstPlayer.name}`);
-  }
-
-  private handleFold(playerId: string) {
-    const player = this.state.players.get(playerId);
-    if (!player) return;
-
-    player.folded = true;
-    player.hasActed = true;
-
-    console.log(`[PokerRoom] ${player.name} folded`);
-    this.nextTurn();
-  }
-
-  private handleCheck(playerId: string) {
-    const player = this.state.players.get(playerId);
-    if (!player) return;
-
-    if (this.state.currentBet !== player.currentBet) {
-      const client = this.clients.find(c => c.sessionId === playerId);
-      if (client) {
-        this.send(client, 'error', { message: 'Cannot check - must call or raise' });
-      }
+  private handlePlayerAction(client: Client, action: any) {
+    const player = this.state.players.get(client.sessionId);
+    if (!player || client.sessionId !== this.state.currentPlayer || player.isFolded) {
       return;
     }
 
-    player.hasActed = true;
-    console.log(`[PokerRoom] ${player.name} checked`);
-    this.nextTurn();
+    switch (action.type) {
+      case 'fold':
+        player.isFolded = true;
+        player.lastAction = 'Fold';
+        break;
+        
+      case 'call':
+        const callAmount = this.state.currentBet - player.currentBet;
+        const actualCall = Math.min(callAmount, player.chips);
+        player.chips -= actualCall;
+        player.currentBet += actualCall;
+        this.state.pot += actualCall;
+        player.lastAction = actualCall === callAmount ? 'Call' : 'All-in';
+        if (player.chips === 0) player.isAllIn = true;
+        break;
+        
+      case 'raise':
+        const raiseAmount = Math.min(action.amount, player.chips);
+        const totalBet = this.state.currentBet + raiseAmount;
+        const toBet = totalBet - player.currentBet;
+        player.chips -= toBet;
+        player.currentBet = totalBet;
+        this.state.pot += toBet;
+        this.state.currentBet = totalBet;
+        player.lastAction = `Raise to ${totalBet}`;
+        if (player.chips === 0) player.isAllIn = true;
+        break;
+        
+      case 'check':
+        player.lastAction = 'Check';
+        break;
+    }
+
+    this.actionCount++;
+    this.nextPlayer();
   }
 
-  private handleCall(playerId: string) {
-    const player = this.state.players.get(playerId);
-    if (!player) return;
+  private nextPlayer() {
+    let attempts = 0;
+    do {
+      this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.playerOrder.length;
+      attempts++;
+    } while (
+      attempts < this.playerOrder.length && 
+      (this.state.players.get(this.playerOrder[this.currentPlayerIndex])?.isFolded || 
+       this.state.players.get(this.playerOrder[this.currentPlayerIndex])?.isAllIn)
+    );
 
-    const callAmount = this.state.currentBet - player.currentBet;
-    if (callAmount <= 0) {
-      this.handleCheck(playerId);
-      return;
-    }
-
-    if (player.chips < callAmount) {
-      // All-in call
-      this.state.pot += player.chips;
-      player.currentBet += player.chips;
-      player.chips = 0;
-      player.allIn = true;
-    } else {
-      // Normal call
-      player.chips -= callAmount;
-      player.currentBet = this.state.currentBet;
-      this.state.pot += callAmount;
-    }
-
-    player.hasActed = true;
-    console.log(`[PokerRoom] ${player.name} called ${callAmount}`);
-    this.nextTurn();
-  }
-
-  private handleRaise(playerId: string, amount: number) {
-    const player = this.state.players.get(playerId);
-    if (!player) return;
-
-    const totalBet = this.state.currentBet + amount;
-    const additionalAmount = totalBet - player.currentBet;
-
-    if (player.chips < additionalAmount) {
-      const client = this.clients.find(c => c.sessionId === playerId);
-      if (client) {
-        this.send(client, 'error', { message: 'Not enough chips' });
-      }
-      return;
-    }
-
-    if (amount < this.bigBlind) {
-      const client = this.clients.find(c => c.sessionId === playerId);
-      if (client) {
-        this.send(client, 'error', { message: `Minimum raise is ${this.bigBlind}` });
-      }
-      return;
-    }
-
-    player.chips -= additionalAmount;
-    player.currentBet = totalBet;
-    this.state.pot += additionalAmount;
-    this.state.currentBet = totalBet;
-
-    // Reset other players' hasActed status
-    this.state.players.forEach(p => {
-      if (p.id !== playerId && !p.folded) {
-        p.hasActed = false;
-      }
-    });
-
-    player.hasActed = true;
-    console.log(`[PokerRoom] ${player.name} raised to ${totalBet}`);
-    this.nextTurn();
-  }
-
-  private handleAllIn(playerId: string) {
-    const player = this.state.players.get(playerId);
-    if (!player) return;
-
-    const allInAmount = player.chips;
-    const newBet = player.currentBet + allInAmount;
-
-    player.chips = 0;
-    player.currentBet = newBet;
-    player.allIn = true;
-    player.hasActed = true;
-    this.state.pot += allInAmount;
-
-    if (newBet > this.state.currentBet) {
-      this.state.currentBet = newBet;
-      this.state.players.forEach(p => {
-        if (p.id !== playerId && !p.folded) {
-          p.hasActed = false;
-        }
-      });
-    }
-
-    console.log(`[PokerRoom] ${player.name} all-in with ${allInAmount}`);
-    this.nextTurn();
-  }
-
-  private nextTurn() {
-    this.clearTurnTimer();
-
+    // Check if betting round is complete
     if (this.isBettingRoundComplete()) {
       this.nextPhase();
-      return;
+    } else {
+      this.state.currentPlayer = this.playerOrder[this.currentPlayerIndex];
     }
-
-    const players = this.getActivePlayers();
-    const currentIndex = players.findIndex(p => p.id === this.state.currentTurn);
-    let nextIndex = (currentIndex + 1) % players.length;
-
-    let attempts = 0;
-    while (attempts < players.length) {
-      const nextPlayer = players[nextIndex];
-      if (!nextPlayer.folded && !nextPlayer.allIn) {
-        this.state.currentTurn = nextPlayer.id;
-        this.startTurnTimer();
-        return;
-      }
-      nextIndex = (nextIndex + 1) % players.length;
-      attempts++;
-    }
-
-    this.nextPhase();
   }
 
   private isBettingRoundComplete(): boolean {
-    const activePlayers = this.getActivePlayers().filter(p => !p.folded);
+    const activePlayers = Array.from(this.state.players.values()).filter(p => !p.isFolded);
     
+    // If only one player left, round is complete
     if (activePlayers.length <= 1) return true;
-
-    return activePlayers.every(p => 
-      p.hasActed && (p.currentBet === this.state.currentBet || p.allIn)
+    
+    // Check if all active players have made the same bet or are all-in
+    const playersNeedingAction = activePlayers.filter(p => 
+      !p.isAllIn && p.currentBet < this.state.currentBet
     );
+    
+    return playersNeedingAction.length === 0 && this.actionCount >= activePlayers.length;
   }
 
   private nextPhase() {
-    this.clearTurnTimer();
-
-    // Reset for next betting round
-    this.state.players.forEach(p => {
-      p.hasActed = false;
-      p.currentBet = 0;
-    });
+    this.actionCount = 0;
     this.state.currentBet = 0;
+    
+    // Reset player bets for next round
+    this.state.players.forEach(player => {
+      player.currentBet = 0;
+    });
 
-    switch (this.state.gamePhase) {
+    switch (this.state.phase) {
       case 'pre-flop':
+        this.state.phase = 'flop';
         this.dealFlop();
-        this.state.gamePhase = 'flop';
         break;
       case 'flop':
+        this.state.phase = 'turn';
         this.dealTurn();
-        this.state.gamePhase = 'turn';
         break;
       case 'turn':
+        this.state.phase = 'river';
         this.dealRiver();
-        this.state.gamePhase = 'river';
         break;
       case 'river':
+        this.state.phase = 'showdown';
         this.showdown();
         return;
     }
+    
+    // Start next betting round with player after dealer
+    this.currentPlayerIndex = (this.state.dealerPosition + 1) % this.playerOrder.length;
+    this.findNextActivePlayer();
+  }
 
-    const players = this.getActivePlayers().filter(p => !p.folded);
-    if (players.length > 1) {
-      const firstPlayerIndex = (this.state.dealerPosition + 1) % players.length;
-      this.state.currentTurn = players[firstPlayerIndex].id;
-      this.startTurnTimer();
-    } else {
-      this.endHand();
+  private findNextActivePlayer() {
+    let attempts = 0;
+    while (attempts < this.playerOrder.length) {
+      const player = this.state.players.get(this.playerOrder[this.currentPlayerIndex]);
+      if (player && !player.isFolded && !player.isAllIn) {
+        this.state.currentPlayer = this.playerOrder[this.currentPlayerIndex];
+        return;
+      }
+      this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.playerOrder.length;
+      attempts++;
     }
+    
+    // No active players, go to showdown
+    this.nextPhase();
   }
 
   private dealFlop() {
-    const deck = this.createDeck();
-    const skipCards = this.getActivePlayers().length * 2;
-    
-    this.state.communityCards.push(deck[skipCards + 1]);
-    this.state.communityCards.push(deck[skipCards + 2]);
-    this.state.communityCards.push(deck[skipCards + 3]);
-    
-    console.log('[PokerRoom] Flop dealt');
+    // Burn one card, then deal 3 community cards
+    this.deck.pop();
+    for (let i = 0; i < 3; i++) {
+      if (this.deck.length > 0) {
+        this.state.communityCards.push(this.deck.pop()!);
+      }
+    }
+    this.state.message = 'Flop dealt!';
   }
 
   private dealTurn() {
-    const deck = this.createDeck();
-    const skipCards = this.getActivePlayers().length * 2 + 4;
-    this.state.communityCards.push(deck[skipCards]);
-    console.log('[PokerRoom] Turn dealt');
+    // Burn one card, then deal 1 community card
+    this.deck.pop();
+    if (this.deck.length > 0) {
+      this.state.communityCards.push(this.deck.pop()!);
+    }
+    this.state.message = 'Turn dealt!';
   }
 
   private dealRiver() {
-    const deck = this.createDeck();
-    const skipCards = this.getActivePlayers().length * 2 + 6;
-    this.state.communityCards.push(deck[skipCards]);
-    console.log('[PokerRoom] River dealt');
+    // Burn one card, then deal 1 community card
+    this.deck.pop();
+    if (this.deck.length > 0) {
+      this.state.communityCards.push(this.deck.pop()!);
+    }
+    this.state.message = 'River dealt!';
   }
 
   private showdown() {
-    console.log('[PokerRoom] Showdown');
-    this.state.gamePhase = 'showdown';
-
-    const activePlayers = this.getActivePlayers().filter(p => !p.folded);
+    const activePlayers = Array.from(this.state.players.values()).filter(p => !p.isFolded);
     
     if (activePlayers.length === 1) {
-      this.declareWinner(activePlayers[0]);
+      // Only one player left, they win
+      const winner = activePlayers[0];
+      winner.chips += this.state.pot;
+      this.state.message = `${winner.name} wins ${this.state.pot} chips!`;
     } else {
-      // Simple winner selection (first player wins for now)
-      this.declareWinner(activePlayers[0], 'Best hand');
+      // Multiple players, determine winner (simplified - just random for now)
+      const winner = activePlayers[Math.floor(Math.random() * activePlayers.length)];
+      winner.chips += this.state.pot;
+      this.state.message = `${winner.name} wins ${this.state.pot} chips!`;
     }
-
+    
+    // Reset for next hand
     setTimeout(() => {
-      this.endHand();
+      this.state.dealerPosition = (this.state.dealerPosition + 1) % this.playerOrder.length;
+      this.startGame();
     }, 5000);
   }
 
-  private declareWinner(winner: PokerPlayer, handDescription?: string) {
-    winner.chips += this.state.pot;
-    
-    this.state.winner = {
-      playerId: winner.id,
-      playerName: winner.name,
-      hand: handDescription || 'Best hand',
-      winAmount: this.state.pot
-    };
-
-    this.broadcast('gameEnded', {
-      winner: this.state.winner
-    });
-
-    console.log(`[PokerRoom] ${winner.name} wins ${this.state.pot} chips`);
-  }
-
-  private endHand() {
-    this.state.gamePhase = 'waiting';
-    this.state.round++;
-    this.state.pot = 0;
-    this.state.currentBet = 0;
-    this.state.winner = undefined;
-
-    // Move dealer button
-    const players = this.getActivePlayers();
-    if (players.length > 0) {
-      this.state.dealerPosition = (this.state.dealerPosition + 1) % players.length;
-      
-      this.state.players.forEach(p => p.isDealer = false);
-      players[this.state.dealerPosition].isDealer = true;
-    }
-
-    // Remove players with no chips
-    const playersToRemove: string[] = [];
-    this.state.players.forEach(player => {
-      if (player.chips <= 0) {
-        playersToRemove.push(player.id);
-      }
-    });
-
-    playersToRemove.forEach(playerId => {
-      this.state.players.delete(playerId);
-      const client = this.clients.find(c => c.sessionId === playerId);
-      if (client) {
-        client.leave();
-      }
-    });
-
-    // Start next hand if enough players
-    if (this.getActivePlayers().length >= 2) {
-      this.scheduleGameStart();
-    }
-  }
-
-  private endGame(reason: string) {
-    console.log(`[PokerRoom] Game ended: ${reason}`);
-    this.state.gamePhase = 'finished';
-    
-    this.broadcast('gameEnded', { reason });
-    
-    setTimeout(() => {
-      this.disconnect();
-    }, 10000);
-  }
-
-  private getActivePlayers(): PokerPlayer[] {
-    return Array.from(this.state.players.values()).filter(p => p.connected);
-  }
-
-  private startTurnTimer() {
-    this.clearTurnTimer();
-    
-    this.turnTimer = setTimeout(() => {
-      console.log(`[PokerRoom] Turn timeout for ${this.state.currentTurn}`);
-      
-      const player = this.state.players.get(this.state.currentTurn);
-      if (player) {
-        this.handleFold(this.state.currentTurn);
-        this.broadcast('playerTimeout', { playerId: this.state.currentTurn });
-      }
-    }, this.turnTimeLimit);
-  }
-
-  private clearTurnTimer() {
-    if (this.turnTimer) {
-      clearTimeout(this.turnTimer);
-      this.turnTimer = undefined;
-    }
-  }
-
-  onDispose() {
-    console.log('[PokerRoom] Room disposing');
-    this.clearTurnTimer();
-    if (this.gameTimer) {
-      clearTimeout(this.gameTimer);
-    }
+  private endGame() {
+    this.state.gameStarted = false;
+    this.state.phase = 'waiting';
+    this.state.message = 'Game ended. Waiting for more players...';
   }
 }
