@@ -26,7 +26,7 @@ const RouletteGame = dynamic(() => import('../components/roulette/RouletteGame')
   </div>
 });
 
-const PokerGame = dynamic(() => import('../components/poker/PokerGame').then(mod => ({ default: mod.PokerGame })), {
+const PokerGame = dynamic(() => import('../components/poker/PokerGame'), {
   ssr: false,
   loading: () => <div className="min-h-screen bg-gradient-to-br from-blue-900 via-purple-900 to-indigo-900 flex items-center justify-center text-white">
     <div className="text-center">

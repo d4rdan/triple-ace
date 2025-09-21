@@ -1,101 +1,112 @@
-// /client/src/components/poker/PokerGame.tsx
-import React, { useState } from 'react';
-import { Home, Users, Coins, Settings, Play, Info } from 'lucide-react';
-import { usePlatform } from '../platform/PlatformProvider';
-import { PokerGameProvider, usePokerGame } from './context/PokerGameContext';
-import { PokerTable } from './components/PokerTable';
-import { PokerLobby } from './components/PokerLobby';
-import { ActionButtons } from './components/ActionButtons';
-import { GameInfo } from './components/GameInfo';
+// client/src/components/poker/PokerGame.tsx
+
+'use client';
+
+import React from 'react';
+import { PokerProvider, usePoker } from './context/PokerContext';
+import { Lobby } from './components/Lobby';
+import { GameTable } from './components/GameTable';
 
 const PokerGameContent: React.FC = () => {
-  const { setCurrentGame } = usePlatform();
-  const { gameState, isConnected, isConnecting, error } = usePokerGame();
-  const [showInfo, setShowInfo] = useState(false);
+  const {
+    gameState,
+    connectionState,
+    connectToRoom,
+    disconnectFromRoom,
+    sendAction,
+    startGame,
+  } = usePoker();
 
-  if (!isConnected && !isConnecting) {
-    return <PokerLobby />;
+  // Show lobby if not connected or no game state
+  if (!connectionState.isConnected || !gameState) {
+    return (
+      <Lobby
+        connectionState={connectionState}
+        onConnect={connectToRoom}
+        onDisconnect={disconnectFromRoom}
+      />
+    );
   }
 
-  if (isConnecting) {
+  // Show waiting screen if game hasn't started
+  if (!gameState.gameStarted) {
+    const playerCount = Object.keys(gameState.players).length;
+    
     return (
-      <div className="h-screen bg-gradient-to-br from-blue-900 via-purple-900 to-indigo-900 flex items-center justify-center">
-        <div className="text-center text-white">
-          <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <h2 className="text-2xl font-bold mb-2">Connecting to Poker Room...</h2>
-          <p className="text-blue-200">Please wait while we set up your table</p>
+      <div className="min-h-screen bg-gradient-to-br from-green-800 via-green-900 to-green-800 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg shadow-2xl p-8 max-w-md w-full text-center">
+          <div className="text-6xl mb-4">⏳</div>
+          <h2 className="text-2xl font-bold text-gray-800 mb-4">Waiting for Game to Start</h2>
+          
+          <div className="space-y-4">
+            <div className="bg-blue-100 text-blue-800 px-4 py-3 rounded">
+              {gameState.message}
+            </div>
+            
+            <div className="text-gray-600">
+              Players in room: {playerCount}/4
+            </div>
+            
+            {/* Show connected players */}
+            <div className="bg-gray-100 p-4 rounded">
+              <div className="text-sm font-medium text-gray-700 mb-2">Players:</div>
+              <div className="space-y-1">
+                {Object.values(gameState.players).map((player) => (
+                  <div key={player.id} className="flex justify-between text-sm">
+                    <span>{player.name}</span>
+                    <span className="text-gray-500">${player.chips}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            
+            {playerCount >= 2 && (
+              <button
+                onClick={startGame}
+                className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition-colors"
+              >
+                Start Game Now
+              </button>
+            )}
+            
+            <button
+              onClick={disconnectFromRoom}
+              className="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition-colors"
+            >
+              Leave Room
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
-  if (error) {
-    return (
-      <div className="h-screen bg-gradient-to-br from-red-900 via-purple-900 to-indigo-900 flex items-center justify-center">
-        <div className="text-center text-white">
-          <div className="text-6xl mb-4">❌</div>
-          <h2 className="text-2xl font-bold mb-2">Connection Error</h2>
-          <p className="text-red-200 mb-4">{error}</p>
-          <button
-            onClick={() => setCurrentGame(null)}
-            className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-bold"
-          >
-            Back to Lobby
-          </button>
-        </div>
-      </div>
-    );
-  }
-
+  // Show main game table
   return (
-    <div className="h-screen bg-gradient-to-br from-green-900 via-blue-900 to-purple-900 text-white flex flex-col">
-      {/* Header */}
-      <div className="bg-black/30 backdrop-blur-sm p-4 flex justify-between items-center border-b border-white/10">
-        <button
-          onClick={() => setCurrentGame(null)}
-          className="flex items-center gap-2 bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg transition-colors"
-        >
-          <Home size={20} />
-          Leave Table
-        </button>
-        
-        <div className="text-center">
-          <h1 className="text-2xl font-bold">Texas Hold'em Poker</h1>
-          <div className="text-sm opacity-80">
-            Room: {gameState?.gamePhase || 'Waiting'} • Round: {gameState?.round || 1}
-          </div>
-        </div>
-        
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setShowInfo(!showInfo)}
-            className="bg-blue-600 hover:bg-blue-700 p-2 rounded-lg transition-colors"
-          >
-            <Info size={20} />
-          </button>
-          <div className="flex items-center gap-2 bg-black/30 px-4 py-2 rounded-lg">
-            <Users size={20} />
-            <span>{gameState?.players.length || 0}/8</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Game Info Panel */}
-      {showInfo && <GameInfo />}
-
-      {/* Main Game Area */}
-      <div className="flex-1 relative overflow-hidden">
-        <PokerTable />
-        <ActionButtons />
-      </div>
+    <div className="relative">
+      {/* Disconnect button */}
+      <button
+        onClick={disconnectFromRoom}
+        className="fixed top-4 right-4 z-10 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-bold transition-colors"
+      >
+        Leave Game
+      </button>
+      
+      <GameTable
+        gameState={gameState}
+        localPlayerId={connectionState.playerId!}
+        onAction={sendAction}
+      />
     </div>
   );
 };
 
-export const PokerGame: React.FC = () => {
+const PokerGame: React.FC = () => {
   return (
-    <PokerGameProvider>
+    <PokerProvider>
       <PokerGameContent />
-    </PokerGameProvider>
+    </PokerProvider>
   );
 };
+
+export default PokerGame;
